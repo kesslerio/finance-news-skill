@@ -169,3 +169,11 @@ Apache 2.0 - See [LICENSE](LICENSE) file for details.
 ## Related Skills
 
 - **[task-tracker](https://github.com/kesslerio/task-tracker-openclaw-skill):** Personal task management with daily standups
+
+### Degraded Yahoo data
+
+Quote fetching shares a 30-second budget per briefing deadline. The yfinance
+fallback runs in an isolated process with a maximum 10-second batch budget;
+timed-out fetch process groups are terminated, including wrapper children.
+RSS HTTP 404 and 429 responses are skipped without retries. Available headlines
+and quotes remain usable; unavailable quotes are omitted rather than invented.

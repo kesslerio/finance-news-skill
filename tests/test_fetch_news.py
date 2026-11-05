@@ -127,7 +127,7 @@ def test_fetch_market_data_price_fallback(monkeypatch):
         return Result()
 
     monkeypatch.setattr("fetch_news.OPENBB_BINARY", "/bin/openbb-quote")
-    monkeypatch.setattr("fetch_news.subprocess.run", fake_run)
+    monkeypatch.setattr("fetch_news._run_fetch_process", fake_run)
 
     no_fallback = fetch_market_data(["^GSPC"], allow_price_fallback=False)
     assert no_fallback["^GSPC"]["price"] is None

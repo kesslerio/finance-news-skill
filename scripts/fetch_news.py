@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -56,20 +57,23 @@ def fetch_with_retry(
 
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'OpenClaw/1.0'})
-            with urllib.request.urlopen(req, timeout=timeout, context=SSL_CONTEXT) as response:
+            with urllib.request.urlopen(req, timeout=clamp_timeout(timeout, deadline), context=SSL_CONTEXT) as response:
                 return response.read()
         except urllib.error.URLError as e:
             last_error = e
+            if isinstance(e, urllib.error.HTTPError) and e.code in (404, 429):
+                print(f"⚠️ Skipping unavailable feed {url}: HTTP {e.code}", file=sys.stderr)
+                return None
             if attempt < max_retries:
                 delay = base_delay * (2 ** attempt)  # Exponential backoff
                 print(f"⚠️ Fetch failed (attempt {attempt + 1}/{max_retries + 1}): {e}. Retrying in {delay}s...", file=sys.stderr)
-                time.sleep(delay)
+                time.sleep(min(delay, max(0, time_left(deadline))) if deadline is not None else delay)
         except TimeoutError:
             last_error = TimeoutError("Request timed out")
             if attempt < max_retries:
                 delay = base_delay * (2 ** attempt)
                 print(f"⚠️ Timeout (attempt {attempt + 1}/{max_retries + 1}). Retrying in {delay}s...", file=sys.stderr)
-                time.sleep(delay)
+                time.sleep(min(delay, max(0, time_left(deadline))) if deadline is not None else delay)
         except Exception as e:
             last_error = e
             print(f"⚠️ Unexpected error fetching {url}: {e}", file=sys.stderr)
@@ -187,6 +191,8 @@ except RuntimeError as e:
     OPENBB_UNAVAILABLE_REASON = str(e)
 
 OPENBB_FALLBACK_NOTIFIED = False
+QUOTE_DEADLINE = None
+QUOTE_JOB_DEADLINE = None
 
 
 def _warn_openbb_fallback_once() -> None:
@@ -323,6 +329,18 @@ def fetch_rss(
     return items
 
 
+def _run_fetch_process(command, timeout, **kwargs):
+    """Own and reap the whole fetch process group on timeout."""
+    with subprocess.Popen(command, start_new_session=True, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def _fetch_via_openbb(
     openbb_bin: str,
     symbol: str,
@@ -337,13 +355,12 @@ def _fetch_via_openbb(
         return None
 
     try:
-        result = subprocess.run(
+        result = _run_fetch_process(
             [openbb_bin, symbol],
-            capture_output=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True,
             stdin=subprocess.DEVNULL,
-            timeout=effective_timeout,
-            check=False
+            timeout=effective_timeout
         )
         if result.returncode != 0:
             return None
@@ -380,7 +397,7 @@ def _fetch_via_openbb(
         return None
 
 
-def _fetch_via_yfinance(
+def _fetch_via_yfinance_unbounded(
     symbols: list[str],
     timeout: int,
     deadline: float | None,
@@ -456,6 +473,30 @@ def _fetch_via_yfinance(
     return results
 
 
+def _fetch_via_yfinance(symbols, timeout, deadline):
+    """Bound the entire Yahoo batch, including internal retries, in a child."""
+    if not symbols:
+        return {}
+    try:
+        budget = clamp_timeout(min(timeout, 10), deadline)
+    except TimeoutError:
+        return {}
+    command = [
+        sys.executable, "-c",
+        "import json,sys; from fetch_news import _fetch_via_yfinance_unbounded; "
+        "print(json.dumps(_fetch_via_yfinance_unbounded(json.loads(sys.argv[1]), "
+        "float(sys.argv[2]), None)))",
+        json.dumps(symbols), str(budget),
+    ]
+    try:
+        result = _run_fetch_process(command, cwd=SCRIPT_DIR, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, timeout=budget)
+        return json.loads(result.stdout)
+    except (subprocess.SubprocessError, ValueError) as exc:
+        print(f"⚠️ Yahoo batch unavailable within {budget}s: {exc}", file=sys.stderr)
+        return {}
+
+
 def fetch_market_data(
     symbols: list[str],
     timeout: int = 30,
@@ -464,6 +505,13 @@ def fetch_market_data(
 ) -> dict:
     """Fetch market data using openbb-quote (primary) with yfinance fallback."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    global QUOTE_DEADLINE, QUOTE_JOB_DEADLINE
+    if deadline is None or deadline != QUOTE_JOB_DEADLINE:
+        QUOTE_JOB_DEADLINE = deadline
+        QUOTE_DEADLINE = compute_deadline(30)
+    deadline = min(deadline, QUOTE_DEADLINE) if deadline is not None else QUOTE_DEADLINE
+    if time_left(deadline) <= 0:
+        return {}
 
     results = {}
     if not symbols:
@@ -503,10 +551,10 @@ def fetch_market_data(
     return results
 
 
-def fetch_ticker_news(symbol: str, limit: int = 5) -> list[dict]:
+def fetch_ticker_news(symbol: str, limit: int = 5, deadline: float | None = None) -> list[dict]:
     """Fetch news for a specific ticker via Yahoo Finance RSS."""
     url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
-    return fetch_rss(url, limit)
+    return fetch_rss(url, limit, deadline=deadline)
 
 
 def get_cached_news(cache_key: str) -> dict | None:
@@ -754,7 +802,7 @@ def get_portfolio_news(
         if not symbol:
             continue
         
-        articles = fetch_ticker_news(symbol, limit)
+        articles = fetch_ticker_news(symbol, limit, deadline=deadline)
         quotes = fetch_market_data(
             [symbol],
             timeout=subprocess_timeout,
@@ -1121,7 +1169,7 @@ def get_large_portfolio_news(
         if time_left(deadline) is not None and time_left(deadline) <= 0:
             break
             
-        articles = fetch_ticker_news(symbol, limit)
+        articles = fetch_ticker_news(symbol, limit, deadline=deadline)
         quote_data = quotes.get(symbol, {})
         
         news['stocks'][symbol] = {
