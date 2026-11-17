@@ -191,6 +191,7 @@ except RuntimeError as e:
     OPENBB_UNAVAILABLE_REASON = str(e)
 
 OPENBB_FALLBACK_NOTIFIED = False
+OPENBB_PROVIDER_DISABLED = False
 QUOTE_DEADLINE = None
 QUOTE_JOB_DEADLINE = None
 
@@ -202,6 +203,19 @@ def _warn_openbb_fallback_once() -> None:
         return
     print("⚠️ openbb-quote not found, using yfinance fallback", file=sys.stderr)
     OPENBB_FALLBACK_NOTIFIED = True
+
+
+def _disable_openbb_provider(reason: str) -> None:
+    """Stop paying openbb-quote's cost once it reports a provider-level error.
+
+    A broken provider must not consume the shared quote budget that the
+    yfinance batch needs, or every later region silently loses its indices.
+    """
+    global OPENBB_PROVIDER_DISABLED
+    if OPENBB_PROVIDER_DISABLED:
+        return
+    OPENBB_PROVIDER_DISABLED = True
+    print(f"⚠️ openbb-quote error ({reason}); using yfinance fallback", file=sys.stderr)
 
 
 def load_sources():
@@ -349,6 +363,9 @@ def _fetch_via_openbb(
     allow_price_fallback: bool,
 ) -> dict | None:
     """Fetch single symbol via openbb-quote subprocess."""
+    if OPENBB_PROVIDER_DISABLED:
+        return None
+
     try:
         effective_timeout = clamp_timeout(timeout, deadline)
     except TimeoutError:
@@ -374,6 +391,14 @@ def _fetch_via_openbb(
             data = data[0] if data else {}
 
         if not isinstance(data, dict):
+            return None
+
+        # openbb-quote reports failures in-band, e.g.
+        # [{"symbol": "^GSPC", "error": "'App' object has no attribute 'equity'"}].
+        # Such a payload is not market data: returning it would make
+        # fetch_market_data skip the yfinance fallback.
+        if data.get("error"):
+            _disable_openbb_provider(str(data["error"]))
             return None
 
         # Price fallback: use open or prev_close if price is None

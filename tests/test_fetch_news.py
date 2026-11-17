@@ -225,3 +225,51 @@ def test_get_openbb_binary_prefers_repo_wrapper(monkeypatch):
     wrapper = SCRIPT_DIR / "openbb-quote"
     assert wrapper.exists()
     assert get_openbb_binary() == str(wrapper)
+
+
+def test_openbb_error_payload_falls_back_to_yfinance(monkeypatch):
+    """openbb-quote reports failures in-band; they must not count as data."""
+    monkeypatch.setattr("fetch_news.OPENBB_BINARY", "/bin/openbb-quote")
+    monkeypatch.setattr("fetch_news.OPENBB_PROVIDER_DISABLED", False, raising=False)
+    monkeypatch.setattr("fetch_news.QUOTE_JOB_DEADLINE", None)
+    monkeypatch.setattr("fetch_news.QUOTE_DEADLINE", None)
+    payload = json.dumps([{"symbol": "^GSPC", "error": "'App' object has no attribute 'equity'"}])
+
+    def fake_run(*_args, **_kwargs):
+        return MagicMock(returncode=0, stdout=payload, stderr="")
+
+    monkeypatch.setattr("fetch_news._run_fetch_process", fake_run)
+    monkeypatch.setattr(
+        "fetch_news._fetch_via_yfinance",
+        lambda symbols, *_args, **_kwargs: {
+            symbol: {"symbol": symbol, "price": 7384.66, "change_percent": -0.43}
+            for symbol in symbols
+        },
+    )
+
+    result = fetch_market_data(["^GSPC"], allow_price_fallback=True)
+
+    assert result["^GSPC"]["price"] == 7384.66
+    assert result["^GSPC"]["change_percent"] == -0.43
+
+
+def test_openbb_error_payload_disables_provider_for_the_run(monkeypatch):
+    """A broken provider must not spend the shared quote budget on every symbol."""
+    monkeypatch.setattr("fetch_news.OPENBB_BINARY", "/bin/openbb-quote")
+    monkeypatch.setattr("fetch_news.OPENBB_PROVIDER_DISABLED", False, raising=False)
+    monkeypatch.setattr("fetch_news.QUOTE_JOB_DEADLINE", None)
+    monkeypatch.setattr("fetch_news.QUOTE_DEADLINE", None)
+    payload = json.dumps([{"symbol": "^GSPC", "error": "boom"}])
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        return MagicMock(returncode=0, stdout=payload, stderr="")
+
+    monkeypatch.setattr("fetch_news._run_fetch_process", fake_run)
+    monkeypatch.setattr("fetch_news._fetch_via_yfinance", lambda symbols, *_args, **_kwargs: {})
+
+    fetch_market_data(["^GSPC"], allow_price_fallback=True)
+    fetch_market_data(["^DJI"], allow_price_fallback=True)
+
+    assert len(calls) == 1

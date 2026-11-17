@@ -9,7 +9,10 @@ RUN apt-get update && \
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir openbb openbb-yfinance
+# Pinned: openbb 5.x no longer installs openbb-equity, so obb.equity is
+# missing and every quote fails. 4.7.2 is the known-good line (it also fits
+# the 30s quote budget at ~4.7s per symbol).
+RUN pip install --no-cache-dir openbb==4.7.2 openbb-yfinance==1.6.3
 
 # Copy application code
 COPY . .
@@ -19,7 +22,7 @@ COPY . .
 # The bearer token is injected at runtime via `docker run -e KALLIOPE_SERVING_API_KEY`.
 ENV KALLIOPE_SERVING_API_KEY=
 ENV FINANCE_NEWS_ORNITH_BASE_URL=http://100.124.155.99:4000/v1
-ENV FINANCE_NEWS_ORNITH_MODEL=ornith-1.5:35b-medium
+ENV FINANCE_NEWS_ORNITH_MODEL=mama-resident
 ENV FINANCE_NEWS_DS4_BASE_URL=http://100.120.26.16:8888/v1
 ENV FINANCE_NEWS_DS4_API_KEY=dsv4-local
 ENV FINANCE_NEWS_DS4_MODEL=deepseek-v4-flash-0731
