@@ -41,7 +41,10 @@ finance-news portfolio-create                                            # Inter
 
 ### Portfolio CSV Format
 
-Location: `~/clawd/skills/finance-news/config/portfolio.csv`
+Location: `$PORTFOLIOS_DIR/watchlists/portfolio.csv` when `PORTFOLIOS_DIR` is set,
+otherwise `config/portfolio.csv` in the skill checkout. The shipped
+`config/portfolio.csv.example` is header-only; a missing or header-only file
+is an empty watchlist and the briefing omits its portfolio section.
 
 ```csv
 symbol,name,category,notes

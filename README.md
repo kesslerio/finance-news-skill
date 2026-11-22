@@ -137,7 +137,10 @@ The skill includes a Lobster workflow (`workflows/briefing.yaml`) that:
 
 ## Portfolio
 
-Manage your stock watchlist in `config/portfolio.csv`:
+Manage your stock watchlist. Every reader and writer resolves one file:
+`$PORTFOLIOS_DIR/watchlists/portfolio.csv` when `PORTFOLIOS_DIR` is set,
+otherwise `config/portfolio.csv`. A missing or header-only file is an empty
+watchlist: briefings omit the portfolio section and keep the rest.
 
 ```bash
 finance-news portfolio-list              # View portfolio
