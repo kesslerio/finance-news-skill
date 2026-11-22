@@ -9,6 +9,19 @@ import urllib.request
 from pathlib import Path
 
 
+def get_portfolio_file() -> Path:
+    """Return the watchlist CSV path. Every reader and writer goes through here.
+
+    ``$PORTFOLIOS_DIR/watchlists/portfolio.csv`` when ``PORTFOLIOS_DIR`` is set
+    (even if the file does not exist yet, which reads as an empty watchlist),
+    otherwise the legacy ``config/portfolio.csv`` next to the scripts.
+    """
+    env_dir = os.environ.get("PORTFOLIOS_DIR", "").strip()
+    if env_dir:
+        return Path(os.path.expanduser(env_dir)) / "watchlists" / "portfolio.csv"
+    return Path(__file__).resolve().parent.parent / "config" / "portfolio.csv"
+
+
 def ensure_venv() -> None:
     """Re-exec inside local venv if available and not already active."""
     if os.environ.get("FINANCE_NEWS_VENV_BOOTSTRAPPED") == "1":

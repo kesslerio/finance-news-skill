@@ -20,7 +20,7 @@ import urllib.request
 import yfinance as yf
 import pandas as pd
 
-from utils import clamp_timeout, compute_deadline, ensure_venv, time_left
+from utils import clamp_timeout, compute_deadline, ensure_venv, get_portfolio_file, time_left
 
 # Retry configuration
 DEFAULT_MAX_RETRIES = 3
@@ -115,28 +115,6 @@ import feedparser
 
 class PortfolioError(Exception):
     """Portfolio configuration or fetch error."""
-
-
-def ensure_portfolio_config():
-    """Copy portfolio.csv.example to portfolio.csv if real file doesn't exist."""
-    example_file = CONFIG_DIR / "portfolio.csv.example"
-    real_file = CONFIG_DIR / "portfolio.csv"
-
-    if real_file.exists():
-        return
-
-    if example_file.exists():
-        try:
-            shutil.copy(example_file, real_file)
-            print(f"📋 Created portfolio.csv from example", file=sys.stderr)
-        except PermissionError:
-            print(f"⚠️ Cannot create portfolio.csv (read-only environment)", file=sys.stderr)
-    else:
-        print(f"⚠️ No portfolio.csv or portfolio.csv.example found", file=sys.stderr)
-
-
-# Initialize user config (copy example if needed)
-ensure_portfolio_config()
 
 
 def get_openbb_binary() -> str:
@@ -768,8 +746,8 @@ def fetch_market_news(args):
 
 
 def get_portfolio_metadata() -> dict:
-    """Get metadata for portfolio symbols."""
-    path = CONFIG_DIR / "portfolio.csv"
+    """Get metadata for watchlist symbols, keyed by upper-cased symbol."""
+    path = get_portfolio_file()
     meta = {}
     if path.exists():
         import csv
@@ -787,14 +765,14 @@ def get_portfolio_news(
     deadline: float | None = None,
     subprocess_timeout: int = 30,
 ) -> dict:
-    """Get news for portfolio stocks as data."""
-    if not (CONFIG_DIR / "portfolio.csv").exists():
-        raise PortfolioError("Portfolio config missing: config/portfolio.csv")
-    
-    # Get symbols from portfolio
+    """Get news for portfolio stocks as data.
+
+    A missing or header-only watchlist raises PortfolioError, which callers
+    treat as "no portfolio section" rather than a failed briefing.
+    """
     symbols = get_portfolio_symbols()
     if not symbols:
-        raise PortfolioError("No portfolio symbols found")
+        raise PortfolioError(f"Watchlist is empty: {get_portfolio_file()}")
     
     # Get metadata
     portfolio_meta = get_portfolio_metadata()
